@@ -45,10 +45,17 @@ data class Bullet(
     fun distanceTo(other: Offset): Float = position.distanceTo(other)
 }
 
+data class Player(
+    var lives: Int = 3,
+    var isInvulnerable: Boolean = false,
+    var invulnerabilityTimer: Long = 0L
+)
+
 @Composable
 fun SpaceShooterGame() {
     // Game state variables
     var playerX by remember { mutableStateOf(200f) }
+    var player by remember { mutableStateOf(Player()) }
     var bullets by remember { mutableStateOf(listOf<Bullet>()) }
     var enemies by remember { mutableStateOf(listOf<Offset>()) }
     var enemyProjectiles by remember { mutableStateOf(listOf<Offset>()) }
@@ -63,6 +70,11 @@ fun SpaceShooterGame() {
     var shieldActive by remember { mutableStateOf(false) }
     var tripleShotActive by remember { mutableStateOf(false) }
     var backgroundOffset by remember { mutableStateOf(0f) }
+    var isPaused by remember { mutableStateOf(false) }
+
+    // Power-up timers
+    var shieldTimer by remember { mutableStateOf(0L) }
+    var tripleShotTimer by remember { mutableStateOf(0L) }
 
     // Game constants
     val ENEMY_SIZE = 16f
@@ -72,6 +84,8 @@ fun SpaceShooterGame() {
     val ENEMY_SPAWN_RATE = 0.015f
     val ENEMY_SPEED = 2f
     val BULLET_SPEED = 25f
+    val INVULNERABILITY_DURATION = 2000L // 2 seconds
+    val POWER_UP_DURATION = 10000L // 10 seconds
 
     // Load images
     val playerImage = ImageBitmap.imageResource(id = R.drawable.spaceship)
@@ -86,112 +100,176 @@ fun SpaceShooterGame() {
         Color(0xFFFFCC00)  // Yellow
     )
 
+    // Reset game function
+    fun resetGame() {
+        player = Player()
+        gameOver = false
+        score = 0
+        enemies = listOf()
+        bullets = listOf()
+        enemyProjectiles = listOf()
+        rewards = listOf()
+        explosions = listOf()
+        playerX = 200f
+        bossActive = false
+        shieldActive = false
+        tripleShotActive = false
+        shieldTimer = 0L
+        tripleShotTimer = 0L
+    }
+
     // Game loop
     LaunchedEffect(Unit) {
-        while (!gameOver) {
-            // Background scrolling
-            backgroundOffset = (backgroundOffset + 3) % 800
+        var lastUpdateTime = System.currentTimeMillis()
 
-            // Update bullets
-            bullets = bullets.map { bullet ->
-                bullet.copy(position = bullet.position.copy(y = bullet.position.y - BULLET_SPEED))
-            }.filter { it.position.y > 0 }
+        while (true) {
+            if (!isPaused && !gameOver) {
+                val currentTime = System.currentTimeMillis()
+                val deltaTime = currentTime - lastUpdateTime
+                lastUpdateTime = currentTime
 
-            // Update enemies
-            enemies = enemies.map {
-                it.copy(
-                    x = (it.x + Random.nextInt(-2, 2)).coerceIn(ENEMY_SIZE, 400f - ENEMY_SIZE),
-                    y = it.y + ENEMY_SPEED
-                )
-            }.filter { it.y < 800 }
-
-            // Update enemy projectiles
-            enemyProjectiles = enemyProjectiles.map {
-                it.copy(y = it.y + 5)
-            }.filter { it.y < 800 }
-
-            // Update rewards
-            rewards = rewards.map {
-                it.copy(y = it.y + 3)
-            }.filter { it.y < 800 }
-
-            // Update explosions
-            explosions = explosions.filter { Random.nextFloat() > 0.1 }
-
-            // Boss logic
-            if (score % 15 == 0 && score > 0 && !bossActive) {
-                bossActive = true
-                bossHealth = 8
-                bossPosition = Offset(Random.nextFloat() * (400f - BOSS_SIZE), 50f)
-            }
-
-            // Spawn enemies
-            if (!bossActive && Random.nextFloat() < ENEMY_SPAWN_RATE) {
-                enemies = enemies + Offset(
-                    Random.nextFloat() * (400f - ENEMY_SIZE * 2) + ENEMY_SIZE,
-                    0f
-                )
-            }
-
-            // Spawn rewards
-            if (Random.nextFloat() < 0.02) {
-                rewards = rewards + Offset(Random.nextFloat() * 400, 0f)
-            }
-
-            // Boss shooting
-            if (bossActive && Random.nextFloat() < 0.03) {
-                enemyProjectiles = enemyProjectiles + Offset(
-                    bossPosition.x + BOSS_SIZE/2,
-                    bossPosition.y + BOSS_SIZE
-                )
-            }
-
-            // Collision detection - Bullets hitting enemies
-            bullets = bullets.filter { bullet ->
-                val hitEnemy = enemies.find { enemy ->
-                    bullet.distanceTo(enemy) < ENEMY_SIZE + bullet.size/2
+                // Update power-up timers
+                if (shieldActive && currentTime > shieldTimer) {
+                    shieldActive = false
                 }
-                if (hitEnemy != null) {
-                    explosions = explosions + hitEnemy
-                    enemies = enemies - hitEnemy
-                    score += 10
-                    false
-                } else true
-            }
+                if (tripleShotActive && currentTime > tripleShotTimer) {
+                    tripleShotActive = false
+                }
 
-            // Boss collision detection
-            if (bossActive) {
-                bullets.find { bullet ->
-                    bullet.distanceTo(
-                        bossPosition.copy(x = bossPosition.x + BOSS_SIZE/2)
-                    ) < BOSS_SIZE/1.5f
+                // Update player invulnerability
+                if (player.isInvulnerable && currentTime > player.invulnerabilityTimer) {
+                    player.isInvulnerable = false
+                }
+
+                // Background scrolling
+                backgroundOffset = (backgroundOffset + 3) % 800
+
+                // Update bullets
+                bullets = bullets.map { bullet ->
+                    bullet.copy(position = bullet.position.copy(y = bullet.position.y - BULLET_SPEED))
+                }.filter { it.position.y > 0 }
+
+                // Update enemies with smoother movement
+                enemies = enemies.map {
+                    val dx = (Random.nextFloat() - 0.5f) * 2 * deltaTime / 16f
+                    it.copy(
+                        x = (it.x + dx).coerceIn(ENEMY_SIZE, 400f - ENEMY_SIZE),
+                        y = it.y + ENEMY_SPEED * deltaTime / 16f
+                    )
+                }.filter { it.y < 800 }
+
+                // Update enemy projectiles
+                enemyProjectiles = enemyProjectiles.map {
+                    it.copy(y = it.y + 5 * deltaTime / 16f)
+                }.filter { it.y < 800 }
+
+                // Update rewards
+                rewards = rewards.map {
+                    it.copy(y = it.y + 3 * deltaTime / 16f)
+                }.filter { it.y < 800 }
+
+                // Update explosions
+                explosions = explosions.filter { Random.nextFloat() > 0.1 }
+
+                // Boss logic with improved movement
+                if (bossActive) {
+                    bossPosition = bossPosition.copy(
+                        x = (bossPosition.x + Math.sin(currentTime / 1000.0) * 2).toFloat()
+                            .coerceIn(BOSS_SIZE/2, 400f - BOSS_SIZE/2)
+                    )
+                }
+
+                // Spawn boss every 15 kills
+                if (score % 150 == 0 && score > 0 && !bossActive) {
+                    bossActive = true
+                    bossHealth = 8
+                    bossPosition = Offset(Random.nextFloat() * (400f - BOSS_SIZE), 50f)
+                }
+
+                // Spawn enemies
+                if (!bossActive && Random.nextFloat() < ENEMY_SPAWN_RATE) {
+                    enemies = enemies + Offset(
+                        Random.nextFloat() * (400f - ENEMY_SIZE * 2) + ENEMY_SIZE,
+                        0f
+                    )
+                }
+
+                // Spawn rewards
+                if (Random.nextFloat() < 0.02) {
+                    rewards = rewards + Offset(Random.nextFloat() * 400, 0f)
+                }
+
+                // Boss shooting with pattern
+                if (bossActive && Random.nextFloat() < 0.03) {
+                    val projectiles = List(3) { index ->
+                        val spread = (index - 1) * 20f
+                        Offset(
+                            bossPosition.x + BOSS_SIZE/2 + spread,
+                            bossPosition.y + BOSS_SIZE
+                        )
+                    }
+                    enemyProjectiles = enemyProjectiles + projectiles
+                }
+
+                // Collision detection - Bullets hitting enemies
+                bullets = bullets.filter { bullet ->
+                    val hitEnemy = enemies.find { enemy ->
+                        bullet.distanceTo(enemy) < ENEMY_SIZE + bullet.size/2
+                    }
+                    if (hitEnemy != null) {
+                        explosions = explosions + hitEnemy
+                        enemies = enemies - hitEnemy
+                        score += 10
+                        false
+                    } else true
+                }
+
+                // Boss collision detection
+                if (bossActive) {
+                    bullets.find { bullet ->
+                        bullet.distanceTo(
+                            bossPosition.copy(x = bossPosition.x + BOSS_SIZE/2)
+                        ) < BOSS_SIZE/1.5f
+                    }?.let {
+                        bossHealth--
+                        bullets = bullets - it
+                        explosions = explosions + bossPosition
+                        if (bossHealth <= 0) {
+                            bossActive = false
+                            score += 100
+                        }
+                    }
+                }
+
+                // Power-up collection
+                rewards.find {
+                    it.distanceTo(Offset(playerX, 750f)) < 25
                 }?.let {
-                    bossHealth--
-                    bullets = bullets - it
-                    explosions = explosions + bossPosition
-                    if (bossHealth <= 0) {
-                        bossActive = false
-                        score += 100
+                    rewards = rewards - it
+                    if (Random.nextBoolean()) {
+                        shieldActive = true
+                        shieldTimer = currentTime + POWER_UP_DURATION
+                    } else {
+                        tripleShotActive = true
+                        tripleShotTimer = currentTime + POWER_UP_DURATION
+                    }
+                }
+
+                // Player hit detection with lives system
+                if (!player.isInvulnerable && !shieldActive &&
+                    enemyProjectiles.any {
+                        it.distanceTo(Offset(playerX, 750f)) < PLAYER_SIZE/3
+                    }) {
+                    player.lives--
+                    if (player.lives <= 0) {
+                        gameOver = true
+                        highestScore = maxOf(highestScore, score)
+                    } else {
+                        player.isInvulnerable = true
+                        player.invulnerabilityTimer = currentTime + INVULNERABILITY_DURATION
                     }
                 }
             }
-
-            // Power-up collection
-            rewards.find {
-                it.distanceTo(Offset(playerX, 750f)) < 25
-            }?.let {
-                rewards = rewards - it
-                if (Random.nextBoolean()) shieldActive = true else tripleShotActive = true
-            }
-
-            // Player hit detection
-            if (enemyProjectiles.any {
-                    it.distanceTo(Offset(playerX, 750f)) < PLAYER_SIZE/3
-                } && !shieldActive) {
-                gameOver = true
-                highestScore = maxOf(highestScore, score)
-            }
-
             delay(16L)
         }
     }
@@ -202,7 +280,7 @@ fun SpaceShooterGame() {
         contentAlignment = Alignment.TopCenter
     ) {
         Column {
-            // Score display
+            // Score and lives display
             Row(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -212,11 +290,37 @@ fun SpaceShooterGame() {
                     color = Color.White,
                     modifier = Modifier.padding(16.dp)
                 )
+                Text(
+                    text = "Lives: ${player.lives}",
+                    color = Color.Red,
+                    modifier = Modifier.padding(16.dp)
+                )
                 if (gameOver) {
                     Text(
                         text = "High Score: $highestScore",
                         color = Color.Yellow,
                         modifier = Modifier.padding(8.dp)
+                    )
+                }
+            }
+
+            // Power-up indicators
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.Start
+            ) {
+                if (shieldActive) {
+                    Text(
+                        text = "Shield Active!",
+                        color = Color.Cyan,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
+                if (tripleShotActive) {
+                    Text(
+                        text = "Triple Shot!",
+                        color = Color.Yellow,
+                        modifier = Modifier.padding(end = 8.dp)
                     )
                 }
             }
@@ -235,42 +339,49 @@ fun SpaceShooterGame() {
                     }
                     .pointerInput(Unit) {
                         detectTapGestures {
-                            val newBullets = if (tripleShotActive) {
-                                listOf(
-                                    Bullet(
-                                        Offset(playerX - 15, 720f),
-                                        BULLET_SIZE,
-                                        bulletColors[Random.nextInt(bulletColors.size)]
-                                    ),
-                                    Bullet(
-                                        Offset(playerX, 720f),
-                                        BULLET_SIZE,
-                                        bulletColors[Random.nextInt(bulletColors.size)]
-                                    ),
-                                    Bullet(
-                                        Offset(playerX + 15, 720f),
-                                        BULLET_SIZE,
-                                        bulletColors[Random.nextInt(bulletColors.size)]
+                            if (!isPaused && !gameOver) {
+                                val newBullets = if (tripleShotActive) {
+                                    listOf(
+                                        Bullet(
+                                            Offset(playerX - 15, 720f),
+                                            BULLET_SIZE,
+                                            bulletColors[Random.nextInt(bulletColors.size)]
+                                        ),
+                                        Bullet(
+                                            Offset(playerX, 720f),
+                                            BULLET_SIZE,
+                                            bulletColors[Random.nextInt(bulletColors.size)]
+                                        ),
+                                        Bullet(
+                                            Offset(playerX + 15, 720f),
+                                            BULLET_SIZE,
+                                            bulletColors[Random.nextInt(bulletColors.size)]
+                                        )
                                     )
-                                )
-                            } else {
-                                listOf(
-                                    Bullet(
-                                        Offset(playerX, 720f),
-                                        BULLET_SIZE,
-                                        bulletColors[Random.nextInt(bulletColors.size)]
+                                } else {
+                                    listOf(
+                                        Bullet(
+                                            Offset(playerX, 720f),
+                                            BULLET_SIZE,
+                                            bulletColors[Random.nextInt(bulletColors.size)]
+                                        )
                                     )
-                                )
+                                }
+                                bullets = bullets + newBullets
                             }
-                            bullets = bullets + newBullets
                         }
                     }
             ) {
-                // Draw player
+                // Draw player with blinking effect when invulnerable
+                val playerAlpha = when {
+                    player.isInvulnerable -> if ((System.currentTimeMillis() / 200) % 2 == 0L) 0.5f else 1f
+                    shieldActive -> 0.7f
+                    else -> 1f
+                }
                 drawImage(
                     playerImage,
                     Offset(playerX - PLAYER_SIZE/2, 720f - PLAYER_SIZE/2),
-                    alpha = if (shieldActive) 0.7f else 1f
+                    alpha = playerAlpha
                 )
 
                 // Draw bullets with glow effects
@@ -297,49 +408,108 @@ fun SpaceShooterGame() {
                     )
                 }
 
-                // Draw boss
+                // Draw boss with health bar
                 if (bossActive) {
                     drawImage(
                         bossImage,
                         Offset(bossPosition.x - BOSS_SIZE/2, bossPosition.y - BOSS_SIZE/2)
                     )
+
+                    // Draw boss health bar
+                    val healthBarWidth = 60f
+                    val healthBarHeight = 8f
+                    val healthPercentage = bossHealth / 8f
+
+                    // Health bar background
+                    drawRect(
+                        color = Color.Red,
+                        topLeft = Offset(bossPosition.x - healthBarWidth/2, bossPosition.y - BOSS_SIZE),
+                        size = androidx.compose.ui.geometry.Size(width = healthBarWidth, height = healthBarHeight)
+                    )
+
+                    // Current health
+                    drawRect(
+                        color = Color.Green,
+                        topLeft = Offset(bossPosition.x - healthBarWidth/2, bossPosition.y - BOSS_SIZE),
+                        size = androidx.compose.ui.geometry.Size(width = healthBarWidth * healthPercentage, height = healthBarHeight)
+                    )
                 }
 
-                // Draw enemy projectiles
+                // Draw enemy projectiles with glow effect
                 enemyProjectiles.forEach {
+                    // Glow
+                    drawCircle(Color.Yellow.copy(alpha = 0.3f), radius = BULLET_SIZE, center = it)
+                    // Core
                     drawCircle(Color.Yellow, radius = BULLET_SIZE/2, center = it)
                 }
 
-                // Draw rewards
+                // Draw rewards with pulsing effect
                 rewards.forEach {
-                    drawCircle(Color.Cyan, radius = 10f, center = it)
+                    val pulseSize = (Math.sin(System.currentTimeMillis() / 200.0) * 2 + 10).toFloat()
+                    drawCircle(Color.Cyan.copy(alpha = 0.3f), radius = pulseSize * 1.5f, center = it)
+                    drawCircle(Color.Cyan, radius = pulseSize, center = it)
                 }
 
-                // Draw explosions
+                // Draw explosions with expanding effect
                 explosions.forEach {
-                    drawCircle(Color(0xFFFF4444), radius = 20f, center = it)
+                    val explosionSize = (Math.random() * 10 + 15).toFloat()
+                    drawCircle(Color(0xFFFF4444).copy(alpha = 0.7f), radius = explosionSize, center = it)
+                    drawCircle(Color(0xFFFFAA00).copy(alpha = 0.5f), radius = explosionSize * 0.7f, center = it)
                 }
             }
+        }
+
+        // Pause button
+        Button(
+            onClick = { isPaused = !isPaused },
+            modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
+        ) {
+            Text(if (isPaused) "Resume" else "Pause")
         }
 
         // Game over overlay
         if (gameOver) {
             Column(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.8f)),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text("Game Over!", color = Color.Red, fontSize = 24.sp)
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(onClick = {
-                    gameOver = false
-                    score = 0
-                    enemies = listOf()
-                    bullets = listOf()
-                    enemyProjectiles = listOf()
-                    playerX = 200f
-                }) {
+                Text("Game Over!", color = Color.Red, fontSize = 32.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Final Score: $score", color = Color.White, fontSize = 24.sp)
+                Text("High Score: $highestScore", color = Color.Yellow, fontSize = 24.sp)
+                Spacer(modifier = Modifier.height(24.dp))
+                Button(onClick = { resetGame() }) {
                     Text("Play Again")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = {
+                    // Handle exit - you can implement system exit or navigation here
+                }) {
+                    Text("Exit")
+                }
+            }
+        }
+
+        // Pause overlay
+        if (isPaused) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.8f)),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text("Paused", color = Color.White, fontSize = 32.sp)
+                Spacer(modifier = Modifier.height(24.dp))
+                Button(onClick = { isPaused = false }) {
+                    Text("Resume")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = { resetGame(); isPaused = false }) {
+                    Text("Restart")
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(onClick = {
